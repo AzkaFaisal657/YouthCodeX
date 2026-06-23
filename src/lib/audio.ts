@@ -4,9 +4,13 @@ class FocusAudioEngine {
   private ctx: AudioContext | null = null;
   private nodes: AudioNode[] = [];
   private gainNode: GainNode | null = null;
+  private cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private getCtx() {
+  private async getCtx() {
     if (!this.ctx) this.ctx = new AudioContext();
+    if (this.ctx.state === "suspended") {
+      await this.ctx.resume();
+    }
     return this.ctx;
   }
 
@@ -42,7 +46,7 @@ class FocusAudioEngine {
       b5 = -0.7616 * b5 - white * 0.016898;
       data[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
       b6 = white * 0.115926;
-      data[i] *= 0.11;
+      data[i] *= 0.2;
     }
     const src = ctx.createBufferSource();
     src.buffer = buffer;
@@ -50,29 +54,58 @@ class FocusAudioEngine {
     return src;
   }
 
-  private makeBinaural(ctx: AudioContext, baseFreq = 200, beatFreq = 10) {
-    const merger = ctx.createChannelMerger(2);
+  private makeBinaural(ctx: AudioContext, baseFreq = 440, beatFreq = 10) {
+    const bus = ctx.createGain();
 
     const left = ctx.createOscillator();
+    left.type = "sine";
     left.frequency.value = baseFreq;
     const leftGain = ctx.createGain();
-    leftGain.gain.value = 0.15;
-    left.connect(leftGain).connect(merger, 0, 0);
+    leftGain.gain.value = 0.3;
+    const leftPan = ctx.createStereoPanner();
+    leftPan.pan.value = -1;
+    left.connect(leftGain).connect(leftPan).connect(bus);
 
     const right = ctx.createOscillator();
+    right.type = "sine";
     right.frequency.value = baseFreq + beatFreq;
     const rightGain = ctx.createGain();
-    rightGain.gain.value = 0.15;
-    right.connect(rightGain).connect(merger, 0, 1);
+    rightGain.gain.value = 0.3;
+    const rightPan = ctx.createStereoPanner();
+    rightPan.pan.value = 1;
+    right.connect(rightGain).connect(rightPan).connect(bus);
 
-    return { merger, oscillators: [left, right] };
+    return { bus, oscillators: [left, right] };
   }
 
-  start(type: SoundType, volume = 0.25) {
-    this.stop();
-    const ctx = this.getCtx();
+  private clearNodes() {
+    if (this.cleanupTimer) {
+      clearTimeout(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    this.nodes.forEach((n) => {
+      if ("stop" in n && typeof (n as OscillatorNode).stop === "function") {
+        try {
+          (n as OscillatorNode).stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+    });
+    this.nodes = [];
+    if (this.gainNode && this.ctx) {
+      this.gainNode.gain.setValueAtTime(0, this.ctx.currentTime);
+      this.gainNode.disconnect();
+    }
+    this.gainNode = null;
+  }
+
+  async start(type: SoundType, volume = 0.4) {
+    this.stop(false);
+    const ctx = await this.getCtx();
+
     this.gainNode = ctx.createGain();
-    this.gainNode.gain.value = 0;
+    this.gainNode.gain.setValueAtTime(0, ctx.currentTime);
     this.gainNode.connect(ctx.destination);
 
     if (type === "brown" || type === "pink") {
@@ -81,27 +114,35 @@ class FocusAudioEngine {
       src.start();
       this.nodes = [src];
     } else {
-      const { merger, oscillators } = this.makeBinaural(ctx);
-      merger.connect(this.gainNode);
+      const { bus, oscillators } = this.makeBinaural(ctx);
+      bus.connect(this.gainNode);
       oscillators.forEach((o) => o.start());
-      this.nodes = [merger, ...oscillators];
+      this.nodes = [bus, ...oscillators];
     }
 
-    this.gainNode.gain.linearRampToValueAtTime(volume, ctx.currentTime + 1.5);
+    const targetVolume = Math.min(volume, 0.7);
+    this.gainNode.gain.linearRampToValueAtTime(targetVolume, ctx.currentTime + 1);
   }
 
-  stop() {
-    if (this.gainNode && this.ctx) {
-      const ctx = this.ctx;
-      this.gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
-      setTimeout(() => {
-        this.nodes.forEach((n) => {
-          if ("stop" in n && typeof (n as OscillatorNode).stop === "function") {
-            (n as OscillatorNode).stop();
-          }
-        });
-        this.nodes = [];
-      }, 850);
+  stop(fadeOut = true) {
+    if (this.cleanupTimer) {
+      clearTimeout(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+
+    if (!this.gainNode || !this.ctx) {
+      this.clearNodes();
+      return;
+    }
+
+    const ctx = this.ctx;
+    const gain = this.gainNode;
+
+    if (fadeOut) {
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
+      this.cleanupTimer = setTimeout(() => this.clearNodes(), 850);
+    } else {
+      this.clearNodes();
     }
   }
 

@@ -19,7 +19,8 @@ export default function Session({
   function start(mins: number) {
     setDuration(mins);
     setRunning(true);
-    audioEngine.start(rec.soundType); // must be inside a click handler — AudioContext needs a user gesture
+    // must be inside a click handler — AudioContext needs a user gesture
+    void audioEngine.start(rec.soundType);
   }
 
   function handleTimerComplete() {
