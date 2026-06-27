@@ -6,9 +6,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
-    host: true,
+    host: "0.0.0.0",
+    allowedHosts: true,
     proxy: {
-      "/api": "http://localhost:8787", // forwards to your backend
+      "/api": "http://localhost:8787",
     },
   },
 });

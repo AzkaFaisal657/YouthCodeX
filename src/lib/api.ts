@@ -1,6 +1,6 @@
 import type { OnboardingTurn, Profile, Recommendation } from "../types";
 
-const BASE = "/api"; // proxied to backend via vite.config.ts
+const BASE = "/api";
 
 export async function onboardingTurn(history: OnboardingTurn[]) {
   const res = await fetch(`${BASE}/onboarding/turn`, {
@@ -13,16 +13,25 @@ export async function onboardingTurn(history: OnboardingTurn[]) {
   >;
 }
 
-export async function getRecommendation(profile: Profile, energy: number, avoiding: string) {
+export async function getRecommendation(
+  profile: Profile,
+  energy: number,
+  avoiding: string,
+  shameSpiral = false
+) {
   const res = await fetch(`${BASE}/session/recommend`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile, energy, avoiding }),
+    body: JSON.stringify({ profile, energy, avoiding, shameSpiral }),
   });
   return res.json() as Promise<Recommendation>;
 }
 
-export async function sendFeedback(profile: Profile, lastRecommendation: Recommendation, didIt: boolean) {
+export async function sendFeedback(
+  profile: Profile,
+  lastRecommendation: Recommendation,
+  didIt: boolean
+) {
   const res = await fetch(`${BASE}/session/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

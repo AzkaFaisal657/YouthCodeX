@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { getProfile, updateProfileNotes } from "./lib/storage";
+import { getProfile, updateProfileNotes, addTask } from "./lib/storage";
 import { getRecommendation, sendFeedback } from "./lib/api";
 import type { Profile, Recommendation } from "./types";
 import Onboarding from "./components/Onboarding";
@@ -12,11 +12,15 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(getProfile());
   const [stage, setStage] = useState<Stage>(profile ? "checkin" : "onboarding");
   const [rec, setRec] = useState<Recommendation | null>(null);
+  const [accentMode, setAccentMode] = useState<"scattered" | "foggy" | "mixed">("mixed");
 
   async function handleCheckIn(energy: number, avoiding: string) {
     if (!profile) return;
+    const shameSpiral = addTask(avoiding);
+    const mode = energy < 40 ? "foggy" : energy >= 65 ? "scattered" : "mixed";
+    setAccentMode(mode);
     setStage("loading");
-    const recommendation = await getRecommendation(profile, energy, avoiding);
+    const recommendation = await getRecommendation(profile, energy, avoiding, shameSpiral);
     setRec(recommendation);
     setStage("session");
   }
@@ -52,7 +56,7 @@ export default function App() {
   }
 
   if (stage === "session" && rec) {
-    return <Session rec={rec} onFinish={handleFinish} />;
+    return <Session rec={rec} accentMode={accentMode} onFinish={handleFinish} />;
   }
 
   if (stage === "thanks") {
