@@ -21,10 +21,10 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 function normalizeRecommendation(data: unknown, energy: number): Recommendation {
   const r = (data ?? {}) as Partial<Recommendation>;
-  let soundType = r.soundType;
-  if (!soundType || !SOUND_TYPES.includes(soundType)) {
-    soundType = energy < 40 ? "pink" : energy >= 65 ? "brown" : "binaural";
-  }
+  // Energy level is the source of truth for sound type — the AI model is unreliable
+  // for structured outputs like this. Energy < 40 = foggy → pink, >= 65 = scattered → brown, else binaural.
+  const soundType: "brown" | "pink" | "binaural" =
+    energy < 40 ? "pink" : energy >= 65 ? "brown" : "binaural";
   return {
     soundType,
     soundReason: r.soundReason?.trim() || "A focus sound matched to how you feel right now.",

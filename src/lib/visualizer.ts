@@ -8,7 +8,7 @@ export function startVisualizer(
 ): () => void {
   const ctx = canvas.getContext("2d")!;
   let rafId = 0;
-  let frame = 0;
+  let scroll = 0;
 
   const resize = () => {
     const dpr = window.devicePixelRatio || 1;
@@ -29,213 +29,199 @@ export function startVisualizer(
     return s / ((hi - lo) * 255);
   }
 
-  function getOrbXY(W: number, H: number): { cx: number; cy: number } {
-    if (orbCenter) return { cx: orbCenter.x, cy: orbCenter.y };
-    return { cx: W * 0.5, cy: H * 0.38 };
-  }
+  /**
+   * Draws a converging ribbon wave — multiple thin lines that all meet at the
+   * left/right edges and spread apart in the middle, exactly like the references.
+   *
+   * @param W            canvas logical width
+   * @param H            canvas logical height
+   * @param yBase        vertical centre of the ribbon
+   * @param numBands     how many parallel lines to draw
+   * @param maxSpread    max pixel spread at the ribbon's widest point
+   * @param waveFn       returns the wave y-displacement for a given x (0..W)
+   * @param colorFn      (bandRatio 0-1, alpha) → css color string
+   * @param glowColor    shadow color for the centre glow
+   */
+  function drawRibbon(
+    W: number,
+    H: number,
+    yBase: number,
+    numBands: number,
+    maxSpread: number,
+    waveFn: (x: number) => number,
+    colorFn: (ratio: number, alpha: number) => string,
+    glowColor: string
+  ) {
+    for (let b = 0; b < numBands; b++) {
+      const ratio = b / Math.max(numBands - 1, 1);
+      const centerDist = Math.abs(ratio - 0.5) * 2; // 0 = centre band, 1 = edge band
+      const alpha = (1 - centerDist * 0.72) * 0.85;
+      const lineWidth = 1.8 - centerDist * 1.0;
 
-  // ── BROWN ─────────────────────────────────────────────────────────────────
-  let brownScroll = 0;
-
-  function drawBrown(W: number, H: number) {
-    analyser.getFloatTimeDomainData(timeData);
-    analyser.getByteFrequencyData(freqData);
-    ctx.clearRect(0, 0, W, H);
-
-    brownScroll += 0.6;
-    const bass   = avg(freqData, 0, 6);
-    const mid    = avg(freqData, 6, 20);
-    const energy = bass * 0.7 + mid * 0.3;
-    const { cx, cy } = getOrbXY(W, H);
-
-    const cols = 28, rows = 14;
-    const gx = W / cols;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const idx   = Math.floor(((c / cols) * 0.4 + (r / rows) * 0.6) * bufferLength * 0.5);
-        const amp   = freqData[idx] / 255;
-        const baseY = cy - H * 0.45 + (H * 0.9) * (r / (rows - 1));
-        const wave  = Math.sin(brownScroll * 0.025 + c * 0.45 + r * 0.7) * H * 0.018;
-        const x     = gx * (c + 0.5);
-        const y     = baseY + wave * (1 + amp * 1.8);
-        ctx.beginPath();
-        ctx.arc(x, y, 1.1 + amp * 2.8, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(180, 90, 25, ${0.06 + amp * 0.18})`;
-        ctx.fill();
-      }
-    }
-
-    const waves = [
-      { color: "rgba(200, 100, 30, 0.13)", yOff: -H * 0.28, amp: 0.09, freq: 2.8, sp: 1.0 },
-      { color: "rgba(240, 140, 45, 0.10)", yOff: -H * 0.10, amp: 0.07, freq: 1.9, sp: 0.6 },
-      { color: "rgba(255, 175, 60, 0.08)", yOff:  H * 0.10, amp: 0.11, freq: 3.6, sp: 1.3 },
-      { color: "rgba(160,  60, 15, 0.09)", yOff:  H * 0.28, amp: 0.06, freq: 1.5, sp: 0.4 },
-    ];
-
-    for (const w of waves) {
       ctx.beginPath();
-      ctx.strokeStyle = w.color;
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = colorFn(ratio, alpha);
+      ctx.lineWidth = Math.max(0.4, lineWidth);
+      ctx.shadowBlur = centerDist < 0.35 ? 18 : 4;
+      ctx.shadowColor = glowColor;
+
       for (let x = 0; x <= W; x += 2) {
-        const t          = (x / W) * Math.PI * w.freq + brownScroll * 0.005 * w.sp;
-        const sIdx       = Math.floor((x / W) * timeData.length);
-        const audioNudge = (timeData[sIdx] || 0) * H * 0.04;
-        const extraSwell = energy * H * 0.035;
-        const y = cy + w.yOff + Math.sin(t) * H * (w.amp + energy * 0.04) + audioNudge + extraSwell;
+        // spreadFactor: 0 at both edges, peaks at x = W/2  →  converging ribbon
+        const spreadFactor = Math.sin((x / W) * Math.PI);
+        const yOff = (ratio - 0.5) * maxSpread * spreadFactor;
+        const y = yBase + yOff + waveFn(x);
         x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
-
-    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, W * 0.42);
-    glow.addColorStop(0, `rgba(255, 200, 80, ${0.07 + energy * 0.08})`);
-    glow.addColorStop(1, "rgba(255, 200, 80, 0)");
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, W, H);
+    ctx.shadowBlur = 0;
   }
 
-  // ── PINK ──────────────────────────────────────────────────────────────────
-  const pinkRings: { r: number; alpha: number; speed: number }[] = [];
-
-  function spawnPinkRing(energy: number) {
-    pinkRings.push({ r: 60, alpha: 0.22 + energy * 0.18, speed: 0.7 + energy * 1.1 });
-  }
-
+  // ── PINK (foggy / low-energy) ────────────────────────────────────────────
   function drawPink(W: number, H: number) {
     analyser.getByteFrequencyData(freqData);
+    analyser.getFloatTimeDomainData(timeData);
     ctx.clearRect(0, 0, W, H);
+    scroll += 0.35;
 
-    const mid    = avg(freqData, 5, 40);
-    const treble = avg(freqData, 40, 120);
-    const energy = mid * 0.65 + treble * 0.35;
-    const { cx, cy } = getOrbXY(W, H);
+    const energy = avg(freqData, 5, 60);
+    const yBase = H * 0.5;
 
-    if (frame % Math.max(18, Math.round(35 - energy * 25)) === 0) spawnPinkRing(energy);
+    drawRibbon(
+      W, H, yBase,
+      20,
+      H * 0.022,
+      (x) => {
+        const t1 = (x / W) * Math.PI * 2.4 + scroll * 0.013;
+        const t2 = (x / W) * Math.PI * 1.1 - scroll * 0.007;
+        const freqIdx = Math.floor((x / W) * bufferLength * 0.4);
+        const audioAmp = freqData[freqIdx] / 255;
+        const timeIdx = Math.floor((x / W) * timeData.length);
+        const timeAmp = timeData[timeIdx] || 0;
+        return (
+          Math.sin(t1) * H * (0.072 + energy * 0.038) +
+          Math.sin(t2) * H * 0.018 +
+          audioAmp * H * 0.026 +
+          timeAmp * H * 0.012
+        );
+      },
+      (ratio, alpha) => {
+        const hue = 330 + ratio * 25;
+        return `hsla(${hue}, 82%, 65%, ${alpha})`;
+      },
+      "rgba(255, 120, 180, 0.9)"
+    );
+  }
 
-    const maxR = Math.min(W, H) * 0.55;
+  // ── BROWN (scattered / high-energy) ─────────────────────────────────────
+  function drawBrown(W: number, H: number) {
+    analyser.getByteFrequencyData(freqData);
+    analyser.getFloatTimeDomainData(timeData);
+    ctx.clearRect(0, 0, W, H);
+    scroll += 0.55;
 
-    for (let i = pinkRings.length - 1; i >= 0; i--) {
-      const ring = pinkRings[i];
-      ring.r     += ring.speed;
-      ring.alpha *= 0.987;
-      if (ring.r > maxR || ring.alpha < 0.005) { pinkRings.splice(i, 1); continue; }
-      const hue = 340 + (ring.r / maxR) * 22;
+    const bass = avg(freqData, 0, 8);
+    const mid = avg(freqData, 8, 30);
+    const energy = bass * 0.55 + mid * 0.45;
+    const yBase = H * 0.5;
+
+    // Vertical tick marks — kept close to wave centre
+    const tickStep = Math.max(6, Math.floor(W / 60));
+    for (let x = 0; x <= W; x += tickStep) {
+      const freqIdx = Math.floor((x / W) * bufferLength * 0.5);
+      const amp = freqData[freqIdx] / 255;
+      const t = (x / W) * Math.PI * 3.5 + scroll * 0.02;
+      const waveY = yBase + Math.sin(t) * H * (0.04 + energy * 0.02);
+      const tickH = (4 + amp * H * 0.032) * (0.5 + energy * 0.5);
+      const alpha = 0.15 + amp * 0.20;
       ctx.beginPath();
-      ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
-      ctx.strokeStyle = `hsla(${hue}, 72%, 68%, ${ring.alpha})`;
-      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = `rgba(255, 165, 55, ${alpha})`;
+      ctx.lineWidth = 1;
+      ctx.shadowBlur = 0;
+      ctx.moveTo(x, waveY - tickH);
+      ctx.lineTo(x, waveY + tickH);
       ctx.stroke();
     }
 
-    const now   = Date.now() * 0.001;
-    const blobs = [
-      { seed: 0.0, hue: 342, baseR: 0.20 },
-      { seed: 1.4, hue: 318, baseR: 0.16 },
-      { seed: 2.7, hue: 355, baseR: 0.14 },
-      { seed: 4.1, hue: 328, baseR: 0.17 },
-      { seed: 5.8, hue: 310, baseR: 0.13 },
-    ];
-    const minDim = Math.min(W, H);
-
-    for (const b of blobs) {
-      const spread = minDim * 0.38;
-      const px = cx + Math.sin(now * 0.07 + b.seed * 1.8) * spread;
-      const py = cy + Math.cos(now * 0.055 + b.seed * 2.2) * spread * 0.7;
-      const r  = minDim * (b.baseR + energy * 0.04);
-      const g  = ctx.createRadialGradient(px, py, 0, px, py, r);
-      g.addColorStop(0,   `hsla(${b.hue}, 75%, 74%, 0.13)`);
-      g.addColorStop(0.5, `hsla(${b.hue}, 70%, 70%, 0.06)`);
-      g.addColorStop(1,   `hsla(${b.hue}, 65%, 66%, 0)`);
-      ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.fillStyle = g;
-      ctx.fill();
-    }
-
-    for (let i = 0; i < 60; i++) {
-      const freqIdx = Math.floor((i / 60) * bufferLength * 0.35);
-      const amp   = freqData[freqIdx] / 255;
-      const angle = (i / 60) * Math.PI * 2 + now * 0.06;
-      const dist  = minDim * (0.18 + (i % 4) * 0.09 + Math.sin(now * 0.15 + i) * 0.03);
-      const px    = cx + Math.cos(angle) * dist;
-      const py    = cy + Math.sin(angle) * dist * 0.75;
-      const hue   = 330 + (i % 5) * 8;
-      ctx.beginPath();
-      ctx.arc(px, py, 1.0 + amp * 3.2, 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${hue}, 70%, 70%, ${0.05 + amp * 0.14})`;
-      ctx.fill();
-    }
+    drawRibbon(
+      W, H, yBase,
+      18,
+      H * 0.020,
+      (x) => {
+        const t1 = (x / W) * Math.PI * 3.5 + scroll * 0.02;
+        const t2 = (x / W) * Math.PI * 1.7 - scroll * 0.011;
+        const t3 = (x / W) * Math.PI * 5.8 + scroll * 0.028;
+        const freqIdx = Math.floor((x / W) * bufferLength * 0.5);
+        const audioAmp = freqData[freqIdx] / 255;
+        const timeIdx = Math.floor((x / W) * timeData.length);
+        const timeAmp = timeData[timeIdx] || 0;
+        return (
+          Math.sin(t1) * H * (0.065 + energy * 0.032) +
+          Math.sin(t2) * H * 0.018 +
+          Math.sin(t3) * H * 0.008 +
+          audioAmp * H * 0.026 +
+          timeAmp * H * 0.012
+        );
+      },
+      (ratio, alpha) => {
+        const hue = 26 + ratio * 18;
+        return `hsla(${hue}, 88%, 60%, ${alpha})`;
+      },
+      "rgba(255, 150, 40, 0.9)"
+    );
   }
 
-  // ── BINAURAL ──────────────────────────────────────────────────────────────
+  // ── BINAURAL (mixed / mid-energy) ────────────────────────────────────────
   function drawBinaural(W: number, H: number) {
     analyser.getByteFrequencyData(freqData);
     ctx.clearRect(0, 0, W, H);
+    scroll += 0.45;
 
-    const now       = Date.now() * 0.001;
+    const now = Date.now() * 0.001;
     const beatPhase = now * Math.PI * 2 * 0.4;
-    const energy    = avg(freqData, 0, 30);
-    const high      = avg(freqData, 30, 80);
-    const scale     = Math.min(W, H) / 650;
-    const { cx, cy } = getOrbXY(W, H);
+    const energy = avg(freqData, 0, 30);
+    const pulse = Math.sin(beatPhase) * 0.5 + 0.5;
 
-    const spread = W * 0.12;
-    const cx1 = cx - spread, cx2 = cx + spread;
+    // First ribbon
+    drawRibbon(
+      W, H, H * 0.5,
+      18,
+      H * 0.020,
+      (x) => {
+        const t1 = (x / W) * Math.PI * 2.9 + scroll * 0.016;
+        const freqIdx = Math.floor((x / W) * bufferLength * 0.4);
+        const audioAmp = freqData[freqIdx] / 255;
+        return (
+          Math.sin(t1) * H * (0.068 + energy * 0.028 + pulse * 0.014) +
+          audioAmp * H * 0.022
+        );
+      },
+      (ratio, alpha) => {
+        const hue = 258 + ratio * 30;
+        return `hsla(${hue}, 78%, 68%, ${alpha * (0.7 + pulse * 0.3)})`;
+      },
+      "rgba(170, 110, 255, 0.9)"
+    );
 
-    for (let ring = 0; ring < 6; ring++) {
-      const phase = beatPhase + ring * 0.55;
-      const pulse = Math.sin(phase) * (16 + energy * 38);
-      const r1    = (55 + ring * 48 + pulse) * scale;
-      const r2    = (55 + ring * 48 + Math.sin(phase + Math.PI * 0.25) * (16 + energy * 38)) * scale;
-      const alpha = Math.max(0, 0.14 - ring * 0.02);
-
-      ctx.beginPath();
-      ctx.arc(cx1, cy, Math.max(1, r1), 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(110, 70, 220, ${alpha})`;
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cx2, cy, Math.max(1, r2), 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(180, 130, 255, ${alpha})`;
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-    }
-
-    const interR = (60 + energy * 80 + Math.sin(beatPhase * 1.3) * 25) * scale;
-    const interG = ctx.createRadialGradient(cx, cy, 0, cx, cy, interR);
-    interG.addColorStop(0,    `rgba(200, 160, 255, ${0.12 + energy * 0.10})`);
-    interG.addColorStop(0.55, `rgba(180, 130, 255, ${0.05 + energy * 0.04})`);
-    interG.addColorStop(1,    "rgba(180, 130, 255, 0)");
-    ctx.beginPath();
-    ctx.arc(cx, cy, interR, 0, Math.PI * 2);
-    ctx.fillStyle = interG;
-    ctx.fill();
-
-    for (let ring = 0; ring < 4; ring++) {
-      const driftX = Math.sin(now * 0.18 + ring * 1.1) * W * 0.04;
-      const driftY = Math.cos(now * 0.14 + ring * 0.9) * H * 0.03;
-      const r      = (90 + ring * 65 + Math.sin(beatPhase + ring * 0.8) * (12 + high * 28)) * scale;
-      const alpha  = Math.max(0, 0.06 - ring * 0.013);
-      ctx.beginPath();
-      ctx.arc(cx + driftX, cy + driftY, Math.max(1, r), 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(220, 190, 255, ${alpha})`;
-      ctx.lineWidth = 0.9;
-      ctx.stroke();
-    }
-
-    for (let i = 0; i < 70; i++) {
-      const freqIdx = Math.floor((i / 70) * bufferLength * 0.5);
-      const amp   = freqData[freqIdx] / 255;
-      const angle = (i / 70) * Math.PI * 2 + now * 0.04;
-      const dist  = (0.22 + (i % 5) * 0.06 + Math.sin(now * 0.3 + i) * 0.03) * Math.min(W, H);
-      const px    = cx + Math.cos(angle) * dist;
-      const py    = cy + Math.sin(angle) * dist * 0.65;
-      ctx.beginPath();
-      ctx.arc(px, py, 0.9 + amp * 2.8, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(150, 100, 240, ${0.04 + amp * 0.13})`;
-      ctx.fill();
-    }
+    // Second ribbon — phase-shifted
+    drawRibbon(
+      W, H, H * 0.5,
+      12,
+      H * 0.013,
+      (x) => {
+        const t2 = (x / W) * Math.PI * 2.9 - scroll * 0.016 + beatPhase * 0.35;
+        const freqIdx = Math.floor((x / W) * bufferLength * 0.35);
+        const audioAmp = freqData[freqIdx] / 255;
+        return (
+          Math.sin(t2) * H * (0.022 + energy * 0.010 + pulse * 0.006) +
+          audioAmp * H * 0.010
+        );
+      },
+      (ratio, alpha) => {
+        const hue = 288 + ratio * 20;
+        return `hsla(${hue}, 72%, 72%, ${alpha * (0.5 + pulse * 0.5)})`;
+      },
+      "rgba(210, 160, 255, 0.8)"
+    );
   }
 
   // ── main loop ─────────────────────────────────────────────────────────────
@@ -243,7 +229,6 @@ export function startVisualizer(
     const W = canvas.offsetWidth;
     const H = canvas.offsetHeight;
     if (W === 0 || H === 0) { rafId = requestAnimationFrame(draw); return; }
-    frame++;
 
     if (soundType === "brown")         drawBrown(W, H);
     else if (soundType === "binaural") drawBinaural(W, H);

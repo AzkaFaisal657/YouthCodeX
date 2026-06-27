@@ -179,10 +179,14 @@ export default function Session({
             orbCenter={orbCenter}
           />
         )}
-        <div style={{ position: "relative", zIndex: 1 }}>
-          <BreathingOrb theme={theme} orbRef={orbRef} />
-          <Timer seconds={duration * 60} onComplete={handleTimerComplete} />
-          <p className={`mt-8 text-base ${theme.subtext} max-w-sm`}>{rec.microAction}</p>
+        <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <div style={{ transform: "translateY(-52px)" }}>
+            <BreathingOrb theme={theme} orbRef={orbRef} />
+          </div>
+          <div style={{ transform: "translateY(18px)", textAlign: "center" }}>
+            <Timer seconds={duration * 60} onComplete={handleTimerComplete} />
+            <p className={`mt-8 text-base ${theme.subtext} max-w-sm`}>{rec.microAction}</p>
+          </div>
         </div>
       </div>
     );
