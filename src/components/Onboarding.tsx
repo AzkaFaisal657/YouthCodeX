@@ -10,21 +10,30 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   );
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   async function submit() {
     if (!answer.trim()) return;
     setLoading(true);
+    setError("");
     const newHistory = [...history, { question, answer }];
-    const result = await onboardingTurn(newHistory);
-    setHistory(newHistory);
-    setAnswer("");
-    if (result.done) {
-      saveProfile({ ...result.profile, createdAt: new Date().toISOString() });
-      onComplete();
-    } else {
-      setQuestion(result.question);
+    try {
+      const result = await onboardingTurn(newHistory);
+      setHistory(newHistory);
+      setAnswer("");
+      if ("done" in result && result.done) {
+        saveProfile({ ...result.profile, createdAt: new Date().toISOString() });
+        onComplete();
+      } else if ("question" in result && result.question) {
+        setQuestion(result.question);
+      } else {
+        setError("Unexpected response from server. Try again.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach the server. Is the backend running?");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
@@ -53,6 +62,9 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         >
           {loading ? "..." : "Continue"}
         </button>
+        {error && (
+          <p className="mt-3 text-sm text-red-600">{error}</p>
+        )}
       </div>
     </div>
   );

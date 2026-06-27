@@ -4,6 +4,7 @@ class FocusAudioEngine {
   private ctx: AudioContext | null = null;
   private nodes: AudioNode[] = [];
   private gainNode: GainNode | null = null;
+  private analyserNode: AnalyserNode | null = null;
   private cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
   private async getCtx() {
@@ -12,6 +13,9 @@ class FocusAudioEngine {
       await this.ctx.resume();
     }
     return this.ctx;
+     }
+  getAnalyser(): AnalyserNode | null {
+    return this.analyserNode;
   }
 
   private makeBrownNoise(ctx: AudioContext) {
@@ -97,7 +101,11 @@ class FocusAudioEngine {
       this.gainNode.gain.setValueAtTime(0, this.ctx.currentTime);
       this.gainNode.disconnect();
     }
+     if (this.analyserNode) {
+      try { this.analyserNode.disconnect(); } catch { /* ok */ }
+    }
     this.gainNode = null;
+    this.analyserNode = null;
   }
 
   async start(type: SoundType, volume = 0.4) {
@@ -106,8 +114,12 @@ class FocusAudioEngine {
 
     this.gainNode = ctx.createGain();
     this.gainNode.gain.setValueAtTime(0, ctx.currentTime);
-    this.gainNode.connect(ctx.destination);
 
+    this.analyserNode = ctx.createAnalyser();
+    this.analyserNode.fftSize = 2048;
+    this.analyserNode.smoothingTimeConstant = 0.85;
+    this.gainNode.connect(this.analyserNode);
+    this.analyserNode.connect(ctx.destination);
     if (type === "brown" || type === "pink") {
       const src = type === "brown" ? this.makeBrownNoise(ctx) : this.makePinkNoise(ctx);
       src.connect(this.gainNode);

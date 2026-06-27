@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 
 export default function Timer({
   seconds,
@@ -8,15 +8,22 @@ export default function Timer({
   onComplete: () => void;
 }) {
   const [remaining, setRemaining] = useState(seconds);
+  const completedRef = useRef(false);
+
+  const finish = useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    onComplete();
+  }, [onComplete]);
 
   useEffect(() => {
     if (remaining <= 0) {
-      onComplete();
+      finish();
       return;
     }
     const id = setTimeout(() => setRemaining((r) => r - 1), 1000);
     return () => clearTimeout(id);
-  }, [remaining, onComplete]);
+  }, [remaining, finish]);
 
   const mins = Math.floor(remaining / 60);
   const secs = remaining % 60;
